@@ -4,18 +4,25 @@ import serial
 import threading
 import time
 
-FONT_SIZES = [12, 16, 20, 24, 28, 32, 40, 48, 56, 64]
+FONT_HEIGHTS = [12, 16, 20, 24, 28, 32, 40, 48, 56, 64]
+FONT_WIDTHS =  [ 6,  8, 10, 12, 14, 16, 20, 24, 28, 32]
 
 PREFIX=bytes.fromhex('aa')
 SUFFIX=bytes.fromhex('cc33c33c')
 
 BYTEORDER='big'
 
-def DWIN_Byte(b):
-    return b.to_bytes(1, BYTEORDER)
+def DWIN_Byte(b, signed=False):
+    return b.to_bytes(1, BYTEORDER, signed=signed)
 
-def DWIN_Word(w):
-    return w.to_bytes(2, BYTEORDER)
+def DWIN_Word(w, signed=False):
+    return w.to_bytes(2, BYTEORDER, signed=signed)
+
+def DWIN_Long(w, signed=False):
+    return w.to_bytes(4, BYTEORDER, signed=signed)
+
+def DWIN_VeryLong(w, signed=False):
+    return w.to_bytes(8, BYTEORDER, signed=signed)
 
 def DWIN_Hex(hexstr):
     return bytes.fromhex(hexstr)
@@ -114,9 +121,20 @@ class Dwin:
         self.queue.terminate()
         self.__io_thread.join()
 
-    def largest_font_for(self, height):
-        for n, size in reversed(list(enumerate(FONT_SIZES))):
+    def font_height(self, font):
+        return FONT_HEIGHTS[font]
+
+    def font_width(self, font):
+        return FONT_WIDTHS[font]
+
+    def largest_font_for_height(self, height):
+        for n, size in reversed(list(enumerate(FONT_HEIGHTS))):
             if size <= height:
+                return n
+
+    def largest_font_for_width(self, width, ncharacters=1):
+        for n, size in reversed(list(enumerate(FONT_WIDTHS))):
+            if size * ncharacters <= width:
                 return n
 
     def read(self):
@@ -144,7 +162,7 @@ class Dwin:
         self.send(bytes.fromhex('345aa5') + DWIN_Byte(d))
         self.read()
 
-    def set_backlight(luminance=1.0):
+    def set_backlight(self, luminance=1.0):
         self.send(DWIN_Byte(0x30), DWIN_Lum(luminance))
 
     def update_lcd(self):
@@ -165,6 +183,26 @@ class Dwin:
                   DWIN_Word(y),
                   text.encode())
 
+    def draw_number(self, x, y, value, size, color=(1,1,1), bgcolor=None, signed=False, digits=5, decimals=0, left_adjust=False, zero_pad=False):
+        drawbg = bgcolor is not None
+        if bgcolor is None:
+            bgcolor = (0,0,0)
+        #display_zero = zero_as is not None
+        #zero_style = zero_as == '0'
+        value = round(value * 10 ** decimals)
+        #adjust = 1 if not left_adjust and signed and value >= 0 else 0
+        if not left_adjust and signed and value >= 0:
+            x += FONT_WIDTHS[size]
+        self.send(DWIN_Byte(0x14),
+                  DWIN_Byte(drawbg << 7 | signed << 6 | (not left_adjust) << 5 | zero_pad << 4 | size & 0b1111),
+                  DWIN_Color(*color),
+                  DWIN_Color(*bgcolor),
+                  DWIN_Byte(digits - decimals),
+                  DWIN_Byte(decimals),
+                  DWIN_Word(x),
+                  DWIN_Word(y),
+                  DWIN_Long(value, signed))
+
     def draw_line(self, x0, y0, x1, y1, color=(1,1,1)):
         self.send(DWIN_Byte(0x03),
                   DWIN_Color(*color),
@@ -183,49 +221,52 @@ class Dwin:
                   DWIN_Word(x1),
                   DWIN_Word(y1))
 
+    def draw_qr(self, x, y, message, pixel_size=1):
+        self.send(DWIN_Byte(0x21),
+                  DWIN_Word(x),
+                  DWIN_Word(y),
+                  DWIN_Byte(pixel_size),
+                  message.encode())
+
     def load_jpeg(self, jpegid=0):
         self.send(DWIN_Byte(0x22),
                   DWIN_Byte(0x00),
                   DWIN_Byte(jpegid))
 
-def fontTest():
-    sizes = [12, 16, 20, 24, 28, 32, 40, 48, 56, 64]
-    y = 0
-    for i in range(8):
-        c = i % 2
-        col = (0, (1 - c) / 2, c * 0.7)
-        dwin.draw_string(21,  y, 'hey {}'.format(i), i, bgcolor=col, fixedwidth=True)
-        y += sizes[i] + 1
-    dwin.drawLine(21, y, 50, y)
-    y = 0
-    for i in range(2):
-        c = i % 2
-        col = (0, (1 - c) / 2, c * 0.7)
-        dwin.draw_string(221,  y, 'hey {}'.format(i+8), i+8, bgcolor=col, fixedwidth=True)
-        y += sizes[i+8] + 1
-    dwin.drawLine(221, y, 250, y)
-    x = 0
-    for y in range(272):
-        if y % 10 == 0:
-            c = int(y / 10) % 2
-            col = (c, 1 - c, 0)
-            dwin.draw_rect(x,y,x+20,y+9,col,fill=1)
-        c = y % 2
-        col = (c, c, 1)
-        dwin.drawLine(x+10,y,x+19,y,col)
+def number_test(d):
+    font = 5
+    decs = 2
+    for n, val in enumerate([0, 123, -48342, 2.21231, -87.8, 923.9898]):
+        d.draw_number(0, n*FONT_HEIGHTS[font], val, font, signed=True, decimals=decs)
+        d.draw_number(120, n*FONT_HEIGHTS[font], val, font, signed=True, zero_pad=True, decimals=decs)
+        d.draw_number(240, n*FONT_HEIGHTS[font], val, font, signed=True, left_adjust=True, decimals=decs)
+        d.draw_number(360, n*FONT_HEIGHTS[font], val, font, signed=True, left_adjust=True, zero_pad=True, decimals=decs)
 
-if __name__ == '__main__':
+#if __name__ == '__main__':
+async def main():
     # DMT48270C043_04WNZ11
     # 480 x 272
-    with serial.Serial('/dev/ttyAMA0', baudrate=115200, timeout=1) as ser:
-        dwin = Dwin(ser)
+    #with serial.Serial('/dev/ttyAMA0', baudrate=115200, timeout=1) as ser:
+    with Dwin() as dwin:
         dwin.send_handshake()
         dwin.frame_set_rotation(0)
-        #dwin.update_lcd()
+        dwin.set_backlight(0.5)
+        dwin.update_lcd()
         #time.sleep(2)
-        #dwin.frame_clear()
+        dwin.frame_clear()
 
-        dwin.load_jpeg(3)
+        #dwin.load_jpeg(3)
+        number_test(dwin)
+        #dwin.draw_string(100, 60, "Monkeys!", 4)
+        #dwin.draw_number(100, 100, 123, 4)
+
+        #dwin.draw_qr(0,0,"hej",5)
 
         dwin.update_lcd()
+        await asyncio.sleep(10)
 
+if __name__ == '__main__':
+    try:
+        asyncio.run(main(), debug=True)
+    except asyncio.CancelledError:
+        pass

@@ -83,7 +83,7 @@ class MenuList(Elem):
     def __init__(self):
         super().__init__()
         self.items = []
-        self.elems = [MenuItem() for _ in range(4)]
+        self.elems = [MenuItem() for _ in range(8)]
         self.selected_idx = 0
         self.idx_offset = 0
         self.scrollbar_visible = False
@@ -98,6 +98,9 @@ class MenuList(Elem):
         self.update_elems()
         self.layout()
         self.draw()
+
+    def selected_elem(self):
+        return self.elems[self.selected_idx - self.idx_offset]
 
     def adjust_offset(self, delta):
         self.idx_offset += delta
@@ -125,6 +128,7 @@ class MenuList(Elem):
     def set_selection(self, new_idx):
         if new_idx == self.selected_idx or new_idx < 0 or new_idx >= len(self.items):
             return
+        self.selected_elem().selected = False
         if new_idx < self.idx_offset + 1:
             self.scroll_up()
         elif new_idx >= self.idx_offset + len(self.elems) - 1:
@@ -132,8 +136,9 @@ class MenuList(Elem):
         else:
             pass
         self.selected_idx = new_idx
-        self.update_elems()
-        self.draw()
+        self.selected_elem().selected = True
+        #self.update_elems()
+        #self.draw()
         global display
         display.update_lcd()
 
@@ -146,7 +151,7 @@ class MenuList(Elem):
     def layout(self):
         global display
         item_height = int(self.height / len(self.elems))
-        font = display.largest_font_for(item_height)
+        font = display.largest_font_for_height(item_height)
         print('ih {} font {}'.format(item_height, font))
         scroller_width = 10 if self.scrollbar_visible else 0
         for n, e in enumerate(self.elems):
@@ -176,19 +181,86 @@ class MenuList(Elem):
         display.draw_rect(x0, self.y, x1, self.y + self.height - 1, color=bgcolor, fill=1)
         display.draw_rect(x0, y0, x1, y1, color=(0.75, 0.75, 0.75), fill=1)
 
-class VerticalInfoPanel:
+class StatusBar(Elem):
     def __init__(self):
-        self.data = { 'ext_curr': None,
-                      'ext_tgt': None,
-                      'bed_curr': None,
-                      'bed_tgt': None,
-                      'fan': None,
-                      'x': None,
-                      'y': None,
-                      'z': None }
+        super().__init__()
+        self.current_prio = 0
+
+    def info(self, text):
+        if self.current_prio == 0:
+            self.bgcolor = (0.15, 0.25, 0.50)
+            self.text = text
+
+    def warn(self, text):
+        if self.current_prio <= 1:
+            self.bgcolor = (0.25, 0.25, 0.25)
+            self.text = text
+            self.current_prio = 1
+
+    def error(self, text):
+        if self.current_prio <= 2:
+            self.bgcolor = (0.25, 0.25, 0.25)
+            self.text = text
+            self.current_prio = 2
+
+    def layout(self):
+        self.font = display.largest_font_for_height(self.height)
+
+class ValueBox(Elem):
+    def __init__(self):
+        super().__init__()
+        self.horizontal = True
+        self.label = Elem()
+        self.value = Elem()
+
+    def layout(self):
+        self.label.x = self.x
+        self.label.y = self.y
+        if self.horizontal:
+            self.label.width = self.width // 2
+            self.label.height = self.height
+            self.value.x = self.x + self.label.width + 1
+            self.value.y = self.y
+            self.value.width = self.width - self.label.width
+            self.value.height = self.height
+        else:
+            self.label.width = self.width
+            self.label.height = self.height // 2
+            self.value.x = self.x
+            self.value.y = self.y + self.label.height + 1
+            self.value.width = self.width
+            self.value.height = self.height - self.label.height
+        self.label.font = 1
+        self.value.font = 1
 
     def draw(self):
+        self.label.draw()
+        self.value.draw()
+
+
+class VerticalInfoPanel(Elem):
+    def __init__(self):
+        super().__init__()
+        self.poss = [ValueBox() for _ in range(3)]
+
+    def set_pos(self, posv):
         pass
+
+    def layout(self):
+        w3 = self.width // 3
+        for n, vb in enumerate(self.poss):
+            vb.horizontal = False
+            vb.x = self.x + n * w3
+            vb.y = self.y
+            vb.width = w3
+            vb.height = 34
+            vb.label.text = ['X', 'Y', 'Z'][n]
+            vb.value.text = ['-123.34', '   0.00', '- 13.8'][n]
+            vb.layout()
+
+    def draw(self):
+        for vb in self.poss:
+            vb.draw()
 
 
 class UI:
@@ -196,11 +268,16 @@ class UI:
         self.width = 480
         self.height = 272
         self.menu = MenuList()
+        self.info = VerticalInfoPanel()
         self.focus = self.menu
 
     def layout(self):
         sidebar_width = 180
-        self.menu.x = sidebar_width
+        self.info.width = sidebar_width
+        self.info.height = self.height
+        self.info.layout()
+
+        self.menu.x = sidebar_width + 1
         self.menu.y = 0
         self.menu.width = self.width - sidebar_width
         self.menu.height = self.height
@@ -210,6 +287,7 @@ class UI:
     def draw(self):
         global display
         display.frame_clear()
+        self.info.draw()
         self.menu.draw()
 
     async def move_down(self, steps):
